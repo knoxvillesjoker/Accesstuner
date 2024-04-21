@@ -1,0 +1,875 @@
+/*Libraries provided by adafruit written by Lady Ada Fried.
+ *Please stick to adafruit products as chinese knock offs are very,
+ *very, very, very, very, very problematic.
+ * code for bar courtesy of:
+ * https://forum.arduino.cc/t/tft-progress-bar-wont-go-back-down/989189
+ * some code pulled from isolation motion tracker pulled from:
+ * https://www.instructables.com/Arduino-Motion-Tracker-From-Alien-Isolation/?fbclid=IwAR2P0H8tUwBisNGaP4C2vccz-fbBOlxxfdm8EIJJEHgAZnKOtgemeBjAZ3M
+ * help found on arduino forums at https://arduino.cc
+ */
+// Include the Bounce2 library found here :
+// https://github.com/thomasfredericks/Bounce2
+#include <avr/wdt.h>
+#include <Bounce2.h>
+#include <SPI.h>
+#include "Adafruit_GFX.h"
+#include "Adafruit_ILI9341.h"
+#include <LcdProgressBar.h>
+#include <LiquidCrystal.h>
+
+// For the Adafruit shield, these are the default.
+// USE hardware SPI pins.
+// For Micro those pins are CIPO/MISO=D14, COPI/MOSI=D16, SCK=D15
+#define TFT_DC 9
+#define TFT_CS 10
+// the colors are in a RGB565 format, so to get it you first need to grab it as a RGB888 and convert
+//go here
+//https://imagecolorpicker.com/en
+//then here
+//http://www.barth-dev.de/online/rgb565-color-picker/
+// Assign human-readable names to some common 16-bit color values:
+#define BLACK 0x0000
+#define BLUE 0x001F
+#define RED 0xF800
+#define GREEN 0x07E0
+#define CYAN 0x07FF
+#define MAGENTA 0xF81F
+#define YELLOW 0xFFE0
+#define WHITE 0xFFFF
+#define DARKGREEN 0x03E0
+#define OLIVE 0x7BE0
+#define GREENYELLOW 0xAFE5
+#define TEAL 0x263F
+// button pins
+//22 is a4, 23 is a5 on micro.
+#define BUTTON_PIN_1 A5
+#define BUTTON_PIN_2 A4
+// pot pins are pins 14(a0) and 15(a1)
+Bounce debouncer1 = Bounce();
+Bounce debouncer2 = Bounce();
+enum { initial,
+       bar1test,
+       bar1passed1,
+       bar2test,
+       bar2passed1,
+       bar3test,
+       bar3passed1,
+       gamewon,
+       gamelost };
+unsigned char barstate = bar1test;
+//global integer declarations
+// arguments exist against global variables, however, they are nice if you use integers across functions
+int rangelow;
+int rangehigh;
+int g1low = 80;
+int g1high = 80;
+int center;
+int detect = 0;
+int render = 0;
+int b1 = 0;
+int b2 = 0;
+//invokation for the adafruit TFT
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);  //, TFT_MOSI, TFT_CLK, TFT_MISO);
+
+void setup() {
+  pinMode(A0, INPUT);
+  tft.begin();
+  tft.fillScreen(BLACK);
+  tft.setRotation(1);  //this sets 0,0 as the top left corner
+  boot1();
+  boot2();
+  tft.fillScreen(BLACK);
+  tft.setRotation(1);
+  // button initialization
+  pinMode(BUTTON_PIN_1, INPUT_PULLUP);
+  debouncer1.attach(BUTTON_PIN_1);
+  debouncer1.interval(5);
+  pinMode(BUTTON_PIN_2, INPUT_PULLUP);
+  debouncer2.attach(BUTTON_PIN_2);
+  debouncer2.interval(25);
+  // sets up random number generator for game1 to game 2 transition
+  randomSeed(analogRead(A3));
+  center = random(150, 950);
+}
+
+void loop() {
+  rangelow = center - g1low;
+  rangehigh = center + g1high;
+  // comment out the bottom two if else statements and replace them with the below line to aid in calibrating your setup
+  // calibration();
+  if (rangelow < analogRead(A0) && analogRead(A0) < rangehigh) {
+    game2();
+  } else {  // this is game1 and has to be here for the detection count to register properly.
+    debouncer1.update();
+    debouncer2.update();
+    int value1 = debouncer1.read();
+    int value2 = debouncer2.read();
+    int myHeight = tft.height();
+    int myWidth = tft.width();
+    // this is a delayed screen rerender
+    int render1;
+    render1++;
+    delay(10);
+    if (render1 == 2) {
+      tft.fillScreen(BLACK);
+      render1++;
+    }
+    if (render1 == 40) { render1 = 0; }
+    //I ended up having to separate out remaps for each side of the slider bar
+    int bordw = map(analogRead(A0), 0, 1023, 0, 1023);
+    int bordt = map(analogRead(A0), 0, 256, 0, myWidth);
+    int bordrh = map(analogRead(A0), 256, 512, 0, myHeight);
+    int bordb = map(analogRead(A0), 512, 768, myWidth, 0);
+    int bordlh = map(analogRead(A0), 768, 1023, myHeight, 0);
+    tft.fillRect(bordt, 0, 20, 5, WHITE);
+    tft.fillRect(myWidth - 5, bordrh, 5, 20, WHITE);
+    tft.fillRect(bordb, (myHeight - 5), 20, 5, WHITE);
+    tft.fillRect(0, bordlh, 5, 20, WHITE);
+    delay(10);
+    tft.fillRect(0, 0, 5, myHeight, BLACK);
+    tft.fillRect(0, 0, myWidth, 5, BLACK);
+    tft.fillRect(myWidth - 5, 0, 5, myHeight, BLACK);
+    tft.fillRect(0, (myHeight - 5), myWidth, 5, BLACK);
+    // center box
+    // yellow border
+    tft.drawRect(myWidth * 2 / 16 - 8, myHeight * 4 / 12, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+    tft.drawRect(myWidth * 2 / 16 - 7, myHeight * 4 / 12 - 1, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+    tft.drawRect(myWidth * 2 / 16 - 6, myHeight * 4 / 12 - 2, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+    tft.drawRect(myWidth * 2 / 16 - 5, myHeight * 4 / 12 - 3, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+    tft.drawRect(myWidth * 2 / 16 - 4, myHeight * 4 / 12 - 4, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+    tft.drawRect(myWidth * 2 / 16 - 3, myHeight * 4 / 12 - 5, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+    // text segments
+    tft.setCursor(myWidth * 2 / 16, myHeight * 5 / 12 - 10);
+    tft.setTextColor(WHITE);
+    tft.setTextSize(2);
+    tft.print("INCORRECT CODE");
+    tft.setCursor(myWidth * 2 / 16, myHeight * 7 / 12 - 10);
+    tft.setTextColor(WHITE);
+    tft.setTextSize(2);
+    tft.print("SYSTEM DETECTIONS");
+    tft.setCursor(myWidth * 13 / 16, myHeight * 7 / 12 - 10);
+    tft.setTextColor(WHITE);
+    tft.setTextSize(2);
+    tft.print(detect);
+    tft.setCursor(myWidth * 13 / 16 + 12, myHeight * 7 / 12 - 10);
+    tft.setTextColor(WHITE);
+    tft.setTextSize(2);
+    tft.print("/3");
+    // this is a rerender section
+    if (value1 == 0) { b1++; }
+    if (b1 == 5) {
+      tft.fillScreen(BLACK);
+      b1++;
+    }
+    if (b1 == 7) { b1 = 0; }
+    // this is for the static effect
+    //row1
+    tft.fillRect(myWidth * 1 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 1 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16, myHeight * 1 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16 + 10, myHeight * 1 / 12 + 10, 10, 10, WHITE);
+    //row2
+    tft.fillRect(myWidth * 1 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 1 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16, myHeight * 2 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16 + 10, myHeight * 2 / 12 + 10, 10, 10, WHITE);
+    //half row3
+    tft.fillRect(myWidth * 1 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16, myHeight * 3 / 12, 10, 10, WHITE);
+    //rows
+    tft.fillRect(myWidth * 1 / 16, myHeight * 4 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 1 / 16, myHeight * 5 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 1 / 16, myHeight * 6 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 1 / 16, myHeight * 7 / 12, 10, 10, WHITE);
+
+    //row8
+    tft.fillRect(myWidth * 1 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 1 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16, myHeight * 8 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16 + 10, myHeight * 8 / 12 + 10, 10, 10, WHITE);
+
+
+    //row9
+    tft.fillRect(myWidth * 1 / 16, myHeight * 9 / 12, 20, 20, WHITE);
+    //tft.fillRect(myWidth * 2 / 16,myHeight * 9 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 3 / 16, myHeight * 9 / 12, 20, 20, WHITE);
+    //tft.fillRect(myWidth * 4 / 16,myHeight * 9 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 5 / 16, myHeight * 9 / 12, 20, 20, WHITE);
+    //tft.fillRect(myWidth * 6 / 16,myHeight * 9 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 7 / 16, myHeight * 9 / 12, 20, 20, WHITE);
+    //tft.fillRect(myWidth * 8 / 16,myHeight * 9 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 9 / 16, myHeight * 9 / 12, 20, 20, WHITE);
+    //tft.fillRect(myWidth * 10 / 16,myHeight * 9 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 11 / 16, myHeight * 9 / 12, 20, 20, WHITE);
+    //tft.fillRect(myWidth * 12 / 16,myHeight * 9 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 13 / 16, myHeight * 9 / 12, 20, 20, WHITE);
+    //tft.fillRect(myWidth * 14 / 16,myHeight * 9 / 12,20,20,WHITE);
+    //row10
+    tft.fillRect(myWidth * 1 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+  //  tft.fillRect(myWidth * 1 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 2 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 3 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 4 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+  //  tft.fillRect(myWidth * 4 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 5 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 6 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 7 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 8 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 9 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 10 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 11 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 12 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 13 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16, myHeight * 10 / 12, 10, 10, WHITE);
+    tft.fillRect(myWidth * 14 / 16 + 10, myHeight * 10 / 12 + 10, 10, 10, WHITE);
+    //row11
+    //tft.fillRect(myWidth * 1 / 16,myHeight * 11 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 2 / 16, myHeight * 11 / 12, 20, 15, WHITE);
+    //tft.fillRect(myWidth * 3 / 16,myHeight * 11 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 4 / 16, myHeight * 11 / 12, 20, 15, WHITE);
+    //tft.fillRect(myWidth * 5 / 16,myHeight * 11 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 6 / 16, myHeight * 11 / 12, 20, 15, WHITE);
+    //tft.fillRect(myWidth * 7 / 16,myHeight * 11 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 8 / 16, myHeight * 11 / 12, 20, 15, WHITE);
+    //tft.fillRect(myWidth * 9 / 16,myHeight * 11 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 10 / 16, myHeight * 11 / 12, 20, 15, WHITE);
+    //tft.fillRect(myWidth * 11 / 16,myHeight * 11 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 12 / 16, myHeight * 11 / 12, 20, 15, WHITE);
+    //tft.fillRect(myWidth * 13 / 16,myHeight * 11 / 12,20,20,WHITE);
+    tft.fillRect(myWidth * 14 / 16, myHeight * 11 / 12, 20, 15, WHITE);
+  }
+  // declarations for buttons
+  debouncer1.update();
+  debouncer2.update();
+  int value1 = debouncer1.read();
+  int value2 = debouncer2.read();
+  delay(20);
+}
+
+void calibration() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  int bar = map(analogRead(A0), 0, 1023, 0, 308);
+  tft.fillRect(6, 80, bar, 44, RED);
+  tft.fillRect(bar, 80, 308 - bar, 44, BLACK);
+  tft.fillRect(0, 20, myWidth, 5, BLACK);
+  // draws pot number reading
+  tft.setCursor(80, 40);
+  tft.setTextColor(RED);
+  tft.setTextSize(3);
+  tft.println(analogRead(A0));
+  // draws pot 2 number reading
+  tft.setCursor(160, 40);
+  tft.setTextColor(RED);
+  tft.setTextSize(3);
+  tft.println(analogRead(A1));
+  // clears button status
+  tft.fillRect(80, 140, 100, 30, BLACK);
+  tft.fillRect(80, 180, 100, 30, BLACK);
+  // add rendering pause
+  delay(100);
+  // clears drawings
+  tft.fillRect(bar, 20, 20, 5, WHITE);
+  tft.fillRect(80, 40, 200, 30, BLACK);
+  //math for range sweetspot logic
+  rangelow = center - g1low;
+  rangehigh = center + g1high;
+  if (rangelow < analogRead(A0) && analogRead(A0) < rangehigh) {
+    tft.fillRect(230, 40, 20, 20, OLIVE);
+  } else {
+    tft.fillRect(230, 40, 20, 20, BLACK);
+  }
+  // declarations for buttons
+  debouncer1.update();
+  debouncer2.update();
+  int value1 = debouncer1.read();
+  int value2 = debouncer2.read();
+  // draws button 2 status
+  tft.setCursor(160, 140);
+  tft.setTextColor(RED);
+  tft.setTextSize(3);
+  tft.println(value2);
+  // draws button 1 status
+  tft.setCursor(80, 140);
+  tft.setTextColor(OLIVE);
+  tft.setTextSize(3);
+  tft.println(value1);
+  // draws pot 2 status
+  tft.setCursor(160, 180);
+  tft.setTextColor(OLIVE);
+  tft.setTextSize(3);
+  tft.println(rangelow);
+  // draws pot 1 status
+  tft.setCursor(80, 180);
+  tft.setTextColor(OLIVE);
+  tft.setTextSize(3);
+  tft.println(rangehigh);
+  // clears text
+}
+
+void boot1() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  byte progress = myWidth / 8;
+  int progress1;
+  tft.fillScreen(BLACK);
+  tft.setCursor(30, 10);
+  tft.setTextColor(GREEN);
+  tft.setTextSize(6);
+  tft.println("SEEGSON");
+  tft.drawRect(myWidth * 2 / 16, myHeight * 3 / 5, myWidth * 12 / 16 - 5, 50, GREEN);
+  for (int i = 0; i < 40; i++) {
+    tft.fillRect(myWidth * 2 / 16, myHeight * 3 / 5, progress, 50, GREEN);
+    tft.setTextSize(2);
+    tft.setCursor(myWidth * 4 / 16, myHeight * 5 / 12);
+    tft.print("Progress  ");
+    tft.setTextSize(2);
+    tft.setCursor(myWidth * 5 / 8, myHeight * 5 / 12);
+    progress1 = progress * 17 / 40;
+    tft.print(progress1);
+    delay(5);
+    tft.fillRect(myWidth * 9 / 16, myHeight * 5 / 12, myHeight * 5 / 12, 20, BLACK);
+    progress += 5;
+  }
+}
+
+void boot2() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  tft.fillScreen(BLACK);
+  tft.setCursor(myWidth * 3 / 16, myHeight * 9 / 12);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(3);
+  tft.print("Please wait");
+  //draws verticle line
+  tft.drawRect(myWidth / 2, 5, 2, 65, WHITE);
+  delay(200);
+  tft.drawRect(myWidth / 2, 5, 2, 65, BLACK);
+  // draws 45 degree line
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 6, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 9, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 5, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 10, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 4, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 11, WHITE);
+  delay(200);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 6, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 9, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 5, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 10, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 4, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 11, BLACK);
+  // draws horizontal line
+  tft.fillRect(myWidth * 6 / 16 + 5, myHeight * 2 / 12 - 5, 70, 2, WHITE);
+  delay(200);
+  tft.fillRect(myWidth * 6 / 16 + 5, myHeight * 2 / 12 - 5, 70, 2, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 9, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 6, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 10, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 5, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 11, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 4, WHITE);
+  delay(200);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 9, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 6, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 10, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 5, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 11, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 4, BLACK);
+
+  tft.drawRect(myWidth / 2, 5, 2, 65, WHITE);
+  delay(200);
+  tft.drawRect(myWidth / 2, 5, 2, 65, BLACK);
+  // draws 45 degree line
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 6, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 9, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 5, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 10, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 4, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 11, WHITE);
+  delay(200);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 6, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 9, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 5, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 10, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 3 / 12 + 4, myWidth * 9 / 16 + 10, myHeight * 1 / 12 - 11, BLACK);
+  // draws horizontal line
+  tft.fillRect(myWidth * 6 / 16 + 5, myHeight * 2 / 12 - 5, 70, 2, WHITE);
+  delay(200);
+  tft.fillRect(myWidth * 6 / 16 + 5, myHeight * 2 / 12 - 5, 70, 2, BLACK);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 9, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 6, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 10, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 5, WHITE);
+  tft.drawLine(myWidth * 7 / 16 - 10, myHeight * 1 / 12 - 11, myWidth * 9 / 16 + 10, myHeight * 3 / 12 + 4, WHITE);
+  delay(200);
+}
+void game2() {
+  // declare variables for function
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  int estcon;
+  int senpak;
+  int ovrpak;
+  // sets base text for game
+  tft.setCursor(myWidth * 3 / 16, myHeight * 1 / 12);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(2);
+  tft.print("SYSTEM OVERRIDE");
+  tft.setCursor(myWidth * 4 / 16 - 10, myHeight * 11 / 12);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("SECURITY FREQUENCY MATCH");
+  tft.setCursor(myWidth * 4 / 16, myHeight * 12 / 12 - 10);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("V2.34 SYSTEM TEST");
+  //calibrate2(); //turn this on ifyou need to verify you have wiring and settings correct.
+  // the big minigame border
+  tft.drawRect(3, myHeight * 3 / 12, myWidth - 9, myHeight * 6 / 12, WHITE);
+  tft.drawRect(6, myHeight * 3 / 12, myWidth - 15, myHeight * 6 / 12, WHITE);
+  int pass1;
+  // this rerenders based on button presses
+  debouncer1.update();
+  debouncer2.update();
+  int value1 = debouncer1.read();
+  int value2 = debouncer2.read();
+  //  int detect;
+  switch (barstate) {
+    case bar1test:
+      bar1();
+      if (value2 == 0 && 220 < analogRead(A1) && analogRead(A1) < 440) {
+        barstate = bar1passed1;
+        break;
+      }
+      if (value2 == 0 && analogRead(A1) > 440) {
+        barstate = gamelost;
+        detect++;
+        break;
+      }
+      if (value2 == 0 && 220 > analogRead(A1)) {
+        barstate = gamelost;
+        detect++;
+        break;
+      }
+      break;
+    case bar1passed1:
+      passedbar1();
+      bar2();
+      barstate = bar2test;
+      break;
+    case bar2test:
+      passedbar1();
+      bar2();
+      if (value2 == 0 && 140 < analogRead(A1) && analogRead(A1) < 280) {
+        barstate = bar2passed1;
+        break;
+      }
+      if (value2 == 0 && analogRead(A1) > 280) {
+        detect++;
+        barstate = gamelost;
+        break;
+      }
+      if (value2 == 0 && 140 > analogRead(A1)) {
+        detect++;
+        barstate = gamelost;       
+        break;
+      }
+      if (value2 == 0 && detect == 3) {
+        barstate = gamelost;
+        break;
+      }
+      break;
+    case bar2passed1:
+      passedbar1();
+      passedbar2();
+      bar3();
+      barstate = bar3test;
+      break;
+    case bar3test:
+      passedbar1();
+      passedbar2();
+      bar3();
+      if (value2 == 0 && 720 > analogRead(A1)) {
+        detect++;
+        barstate = gamelost;       
+        break;
+      }
+      if (value2 == 0 && analogRead(A1) > 870) {
+        detect++;
+        barstate = gamelost;
+        break;
+      }
+      if (value2 == 0 && 720 < analogRead(A1) && analogRead(A1) < 870) {
+        barstate = bar3passed1;
+        break;
+      }
+      break;
+    case bar3passed1:
+      passedbar1();
+      passedbar2();
+      passedbar3();
+      barstate = gamewon;
+      break;
+    case gamewon:
+      tft.fillScreen(GREEN);
+      // center box   yellow border
+      tft.drawRect(myWidth * 2 / 16 - 8, myHeight * 4 / 12, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 7, myHeight * 4 / 12 - 1, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 6, myHeight * 4 / 12 - 2, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 5, myHeight * 4 / 12 - 3, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 4, myHeight * 4 / 12 - 4, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 3, myHeight * 4 / 12 - 5, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      // this fills the center box black
+      tft.fillRect(myWidth * 2 / 16 - 2, myHeight * 4 / 12 - 0, myWidth * 13 / 16 + 5, myHeight * 4 / 12 - 5, BLACK);
+      // text segments
+      tft.setCursor(myWidth * 2 / 16, myHeight * 5 / 12 - 10);
+      tft.setTextColor(GREEN);
+      tft.setTextSize(2);
+      tft.print("Code Accepted");
+      tft.setCursor(myWidth * 2 / 16, myHeight * 7 / 12 - 10);
+      tft.setTextColor(WHITE);
+      tft.setTextSize(2);
+      tft.print("SYSTEM DETECTIONS");
+      tft.setCursor(myWidth * 13 / 16, myHeight * 7 / 12 - 10);
+      tft.setTextColor(GREEN);
+      tft.setTextSize(2);
+      tft.print(detect);
+      tft.setCursor(myWidth * 13 / 16 + 12, myHeight * 7 / 12 - 10);
+      tft.setTextColor(GREEN);
+      tft.setTextSize(2);
+      tft.print("/3");     
+      delay(2000);
+      tft.fillScreen(GREENYELLOW);
+      // text segments
+      tft.setCursor(myWidth * 4 / 16, myHeight * 6 / 12 - 10);
+      tft.setTextColor(TEAL);
+      tft.setTextSize(2);
+      tft.print("Acces Granted");
+      delay(2000);
+      //   This is a software reset call via software functions built into the chipset.
+      softwareReset(WDTO_60MS);
+      break;
+    case gamelost:
+      tft.fillScreen(BLACK);
+      tft.drawRect(myWidth * 2 / 16 - 8, myHeight * 4 / 12, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 7, myHeight * 4 / 12 - 1, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 6, myHeight * 4 / 12 - 2, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 5, myHeight * 4 / 12 - 3, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 4, myHeight * 4 / 12 - 4, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      tft.drawRect(myWidth * 2 / 16 - 3, myHeight * 4 / 12 - 5, myWidth * 13 / 16 + 12, myHeight * 4 / 12, YELLOW);
+      // text segments
+      tft.setCursor(myWidth * 2 / 16, myHeight * 5 / 12 - 10);
+      tft.setTextColor(RED);
+      tft.setTextSize(2);
+      tft.print("INCORRECT CODE");
+      tft.setCursor(myWidth * 2 / 16, myHeight * 7 / 12 - 10);
+      tft.setTextColor(WHITE);
+      tft.setTextSize(2);
+      tft.print("SYSTEM DETECTIONS");
+      tft.setCursor(myWidth * 13 / 16, myHeight * 7 / 12 - 10);
+      tft.setTextColor(WHITE);
+      tft.setTextSize(2);
+      tft.print(detect);
+      tft.setCursor(myWidth * 13 / 16 + 12, myHeight * 7 / 12 - 10);
+      tft.setTextColor(WHITE);
+      tft.setTextSize(2);
+      tft.print("/3");
+      tone(12, 500, 70);
+      delay(1500);
+      //      This is the logic for the counter on detection attempts/failures.  It resets once it reaches 3.
+      tft.fillScreen(TEAL);
+      if (detect <= 2) {
+        barstate = bar1test;
+        break;
+      }
+      if (detect >= 3) {
+        softwareReset(WDTO_60MS);
+        break;
+      }
+      break;
+  }
+  // this is a rerender section based on pushing a button
+  if (value1 == 0) { b1++; }
+  if (b1 == 5) {
+    tft.fillScreen(TEAL);
+    b1++;
+  }
+  if (b1 == 7) { b1 = 0; }  //
+  //  This delays the redrawing of the entire screen
+  render++;
+  delay(10);
+  if (render == 2) {
+    tft.fillScreen(TEAL);
+    render++;
+  }
+  if (render == 70) { render = 0; }
+}
+void bar1() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  int estcon;
+  // bar 1 override takes reading from slider pot and draws the bar
+  tft.setCursor(20, myHeight * 3 / 12 + 5);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("Establishing Connection");
+  estcon = map(analogRead(A1), 0, 1023, 10, 295);
+  tft.fillRect(estcon, myHeight * 4 / 12, 5, 15, WHITE);
+  // redraws left of the slider
+  tft.fillRect(9, myHeight * 4 / 12, estcon - 1, 15, TEAL);
+  // redraws right of the slider
+  tft.fillRect(estcon + 12, myHeight * 4 / 12, myWidth - estcon - 30, 15, TEAL);
+  // these are the static vertical lines on the bar
+  tft.drawRect(9, myHeight * 4 / 12, myWidth - 30, 15, WHITE);
+  tft.fillRect(myWidth - 50, myHeight * 4 / 12, 30, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16 - 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16 + 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 5 / 16 - 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 5 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 5 / 16 + 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 6 / 16 - 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 6 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 6 / 16 + 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 7 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+}
+void bar2() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  int senpak;
+  // bar 2 override takes reading from slider pot and draws the bar
+  tft.setCursor(20, myHeight * 5 / 12 + 5);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("Sending Packets");
+  senpak = map(analogRead(A1), 0, 1023, 10, 295);
+  tft.fillRect(senpak, myHeight * 6 / 12, 5, 15, WHITE);
+  // redraws left of the slider
+  tft.fillRect(9, myHeight * 6 / 12, senpak - 1, 15, TEAL);
+  // redraws right of the slider
+  tft.fillRect(senpak + 12, myHeight * 6 / 12, myWidth - senpak - 30, 15, TEAL);
+  // draws lines
+  tft.drawRect(9, myHeight * 6 / 12, myWidth - 30, 15, WHITE);
+  tft.drawRect(myWidth * 3 / 16 - 10, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 3 / 16 + 10, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 3 / 16, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16 - 10, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16 + 10, myHeight * 6 / 12, 4, 15, WHITE);
+}
+void bar3() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  int ovrpak;
+  //bar 3
+  tft.setCursor(20, myHeight * 7 / 12 + 5);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("Overriding Protocol");
+  ovrpak = map(analogRead(A1), 0, 1023, 10, 295);
+  tft.fillRect(ovrpak, myHeight * 8 / 12, 5, 15, WHITE);
+  // redraws left of the slider
+  tft.fillRect(9, myHeight * 8 / 12, ovrpak - 1, 15, TEAL);
+  // redraws right of the slider
+  tft.fillRect(ovrpak + 12, myHeight * 8 / 12, myWidth - ovrpak - 30, 15, TEAL);
+  // draws lines
+  tft.drawRect(9, myHeight * 8 / 12, myWidth - 30, 15, WHITE);
+  tft.drawRect(myWidth * 11 / 16 - 10, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 11 / 16 + 10, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 11 / 16, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 12 / 16 - 10, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 12 / 16, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 12 / 16 + 10, myHeight * 8 / 12, 4, 15, WHITE);
+}
+void calibrate2() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  // calibration testing
+  tft.setCursor(myWidth * 4 / 16, myHeight * 10 / 12 - 10);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.println(analogRead(A1));
+  // declarations for buttons
+  debouncer1.update();
+  debouncer2.update();
+  int value1 = debouncer1.read();
+  int value2 = debouncer2.read();
+  // draws button 2 status
+  tft.setCursor(myWidth * 6 / 16, myHeight * 10 / 12 - 10);
+  tft.setTextColor(RED);
+  tft.setTextSize(1);
+  tft.println(value2);
+  // draws button 1 status
+  tft.setCursor(myWidth * 8 / 16, myHeight * 10 / 12 - 10);
+  tft.setTextColor(OLIVE);
+  tft.setTextSize(1);
+  tft.println(value1);
+  delay(10);
+  tft.fillRect(myWidth * 4 / 16, myHeight * 10 / 12 - 10, 100, 20, TEAL);
+  // end calibration testing section
+}
+
+void passedbar1() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  // renders static bar once bar 1 passed checks
+  tft.setCursor(20, myHeight * 3 / 12 + 5);
+  tft.drawRect(20, myHeight * 3 / 12 + 5, 200, 15, TEAL);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("Established Connection");
+  tft.drawRect(9, myHeight * 4 / 12, myWidth - 30, 15, WHITE);
+  tft.fillRect(myWidth - 50, myHeight * 4 / 12, 30, 15, WHITE);
+  tft.drawLine(myWidth - 50, myHeight * 4 / 12, myWidth - 35, myHeight * 5 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 49, myHeight * 4 / 12, myWidth - 34, myHeight * 5 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 48, myHeight * 4 / 12, myWidth - 33, myHeight * 5 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 47, myHeight * 4 / 12, myWidth - 32, myHeight * 5 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 35, myHeight * 5 / 12 - 10, myWidth * 15 / 16 + 10, myHeight * 3 / 12, GREEN);
+  tft.drawLine(myWidth - 34, myHeight * 5 / 12 - 10, myWidth * 15 / 16 + 9, myHeight * 3 / 12, GREEN);
+  tft.drawLine(myWidth - 33, myHeight * 5 / 12 - 10, myWidth * 15 / 16 + 8, myHeight * 3 / 12, GREEN);
+  tft.drawLine(myWidth - 32, myHeight * 5 / 12 - 10, myWidth * 15 / 16 + 7, myHeight * 3 / 12, GREEN);
+  tft.drawRect(myWidth * 4 / 16 - 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16 + 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 5 / 16 - 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 5 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 5 / 16 + 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 6 / 16 - 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 6 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 6 / 16 + 10, myHeight * 4 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 7 / 16, myHeight * 4 / 12, 4, 15, WHITE);
+}
+void passedbar2() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  int senpak;
+  // bar 2 override takes reading from slider pot and draws the bar
+  tft.setCursor(20, myHeight * 5 / 12 + 5);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("Packet Sent");
+  // draws lines
+  tft.drawRect(9, myHeight * 6 / 12, myWidth - 30, 15, WHITE);
+  tft.drawRect(myWidth * 3 / 16 - 10, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 3 / 16 + 10, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 3 / 16, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16 - 10, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 4 / 16 + 10, myHeight * 6 / 12, 4, 15, WHITE);
+  tft.fillRect(myWidth - 50, myHeight * 6 / 12, 30, 15, WHITE);
+  tft.drawLine(myWidth - 50, myHeight * 6 / 12, myWidth - 35, myHeight * 7 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 49, myHeight * 6 / 12, myWidth - 34, myHeight * 7 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 48, myHeight * 6 / 12, myWidth - 33, myHeight * 7 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 47, myHeight * 6 / 12, myWidth - 32, myHeight * 7 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 35, myHeight * 7 / 12 - 10, myWidth * 15 / 16 + 10, myHeight * 5 / 12, GREEN);
+  tft.drawLine(myWidth - 34, myHeight * 7 / 12 - 10, myWidth * 15 / 16 + 9, myHeight * 5 / 12, GREEN);
+  tft.drawLine(myWidth - 33, myHeight * 7 / 12 - 10, myWidth * 15 / 16 + 8, myHeight * 5 / 12, GREEN);
+  tft.drawLine(myWidth - 32, myHeight * 7 / 12 - 10, myWidth * 15 / 16 + 7, myHeight * 5 / 12, GREEN);
+}
+void passedbar3() {
+  int myHeight = tft.height();
+  int myWidth = tft.width();
+  int ovrpak;
+  tft.setCursor(20, myHeight * 7 / 12 + 5);
+  tft.setTextColor(WHITE);
+  tft.setTextSize(1);
+  tft.print("Protocol Bypassed");
+  // draws lines
+  tft.drawRect(9, myHeight * 8 / 12, myWidth - 30, 15, WHITE);
+  tft.drawRect(myWidth * 11 / 16 - 10, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 11 / 16 + 10, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 11 / 16, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 12 / 16 - 10, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 12 / 16, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.drawRect(myWidth * 12 / 16 + 10, myHeight * 8 / 12, 4, 15, WHITE);
+  tft.fillRect(myWidth - 50, myHeight * 8 / 12, 30, 15, WHITE);
+  tft.drawLine(myWidth - 50, myHeight * 8 / 12, myWidth - 35, myHeight * 9 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 49, myHeight * 8 / 12, myWidth - 34, myHeight * 9 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 48, myHeight * 8 / 12, myWidth - 33, myHeight * 9 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 47, myHeight * 8 / 12, myWidth - 32, myHeight * 9 / 12 - 10, GREEN);
+  tft.drawLine(myWidth - 35, myHeight * 9 / 12 - 10, myWidth * 15 / 16 + 10, myHeight * 7 / 12, GREEN);
+  tft.drawLine(myWidth - 34, myHeight * 9 / 12 - 10, myWidth * 15 / 16 + 9, myHeight * 7 / 12, GREEN);
+  tft.drawLine(myWidth - 33, myHeight * 9 / 12 - 10, myWidth * 15 / 16 + 8, myHeight * 7 / 12, GREEN);
+  tft.drawLine(myWidth - 32, myHeight * 9 / 12 - 10, myWidth * 15 / 16 + 7, myHeight * 7 / 12, GREEN);
+}
+void softwareReset(uint8_t prescaller) {
+  wdt_enable(prescaller);
+  while (1) {}
+}
